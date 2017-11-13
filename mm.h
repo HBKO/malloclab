@@ -40,6 +40,7 @@ extern team_t team;
 /* Read and write a word at address p */
 #define GET(p) (*(unsigned int *)(p))
 #define PUT(p,val) (*(unsigned int *)(p)=(val))
+#define GET_ADDRESS(p) (*(void **)(p))
 
 
 //总size,包括头尾
@@ -53,6 +54,9 @@ extern team_t team;
 /* Given block ptr bp, compute address of its header and footer */
 #define HDRP(bp) ((char *)(bp)-WSIZE)
 #define FTRP(bp) ((char *)(bp)+ GET_SIZE(HDRP(bp))-DSIZE)
+#define PRED(bp) ((char *)(bp))       //祖先节点
+#define SUCC(bp) ((char *)(bp)+WSIZE)   //后继结点
+
 
 /* Given block ptr bp, compute address of next and previous blocks */
 #define NEXT_BLKP(bp) ((char *)(bp)+GET_SIZE(((char *)(bp)-WSIZE)))
