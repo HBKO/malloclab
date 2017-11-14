@@ -134,6 +134,9 @@ static void *extend_heap(size_t words)
  */
 void *mm_malloc(size_t size)
 {
+    #ifdef DEBUG
+//        printf("the size of alloc=%zu\n",size);
+    #endif
     size_t asize;   /* Adjusted block size */
     size_t extendsize; /* Amount to extend heap if no fit */
     char *bp;
@@ -155,6 +158,7 @@ void *mm_malloc(size_t size)
     if((bp=find_fit(asize))!=NULL)
     {
         place(bp,asize);
+//        printf("the payload of bp is:%u\n",GET_PAYLOAD(bp));
         return bp;
     }
 
@@ -166,6 +170,7 @@ void *mm_malloc(size_t size)
         return NULL;
     }
     place(bp,asize);
+    
     return bp;
 }
 
@@ -174,6 +179,9 @@ void *mm_malloc(size_t size)
  */
 void mm_free(void *ptr)
 {
+    #ifdef DEBUG
+        printf("the point of free=%x\n",(unsigned int)ptr);
+    #endif
     size_t size=GET_SIZE(HDRP(ptr));
     //头尾归为free的block
     PUT(HDRP(ptr),PACK(size,0));
@@ -186,19 +194,26 @@ void mm_free(void *ptr)
  */
 void *mm_realloc(void *ptr, size_t size)
 {
-    void *oldptr = ptr;
-    void *newptr;
-    size_t copySize;
-    
-    newptr = mm_malloc(size);
-    if (newptr == NULL)
-      return NULL;
-    copySize = *(size_t *)((char *)oldptr - SIZE_T_SIZE);
-    if (size < copySize)
-      copySize = size;
-    memcpy(newptr, oldptr, copySize);
-    mm_free(oldptr);
-    return newptr;
+    if(ptr==NULL) return mm_malloc(size);
+    if(size==0)
+    { 
+        mm_free(ptr);
+        return ptr;
+    }
+    if(ptr!=NULL)
+    {
+        size_t finalsize=0;
+        void *newptr=mm_malloc(size);
+        size_t oldsize=GET_PAYLOAD(ptr);
+        if(oldsize<size)
+            finalsize=oldsize;
+        else
+            finalsize=size;
+        memcpy(newptr,ptr,finalsize);
+        mm_free(ptr);
+        return newptr;
+    }
+    return NULL;
 }
 
 
@@ -279,6 +294,7 @@ static void *find_fit(size_t size)
 
 static void place(void* bp,size_t asize)
 {
+
     size_t left=GET_SIZE(HDRP(bp))-asize;
     //大于双字要把头尾都考虑进行说明，可以进行分割,由于输入的asize肯定是双字结构，这样就保证了分割出来的内容也都是双字结构
     //前继和后继结点都要考虑进行
@@ -306,6 +322,8 @@ static void place(void* bp,size_t asize)
 }
 
 
+//1.使用直接添加到链表头，减少时间消耗，但是空间利用率被牺牲
+//2.利用地址顺序来处理
 static void placefree(void* bp)
 {
     if(GET_ALLOC(HDRP(bp)))
@@ -315,22 +333,57 @@ static void placefree(void* bp)
     }
 
 
-    //如果头部为空
+    //如果头部为空,直接存在头部
     if(freelist_head==NULL)
     {
         freelist_head=bp;
-//        freelist_tail=bp;
         //指向的是它的地址，地址里面存的都是是上一个或者下一个块的地址，所以每解一次引用得到的都是对应的下一个块的地址
         GET_ADDRESS(PRED(freelist_head))=NULL;
         GET_ADDRESS(SUCC(freelist_head))=NULL;
     }
-    //头部不为空
+    //头部不为空,按照地址顺序
     else
     {
+        /* LIFO后进先出，牺牲空间利用率来实现换取放置链表的时间降到常数时间 */
+        /*
         GET_ADDRESS(PRED(freelist_head))=bp;
         GET_ADDRESS(SUCC(bp))=freelist_head;
         GET_ADDRESS(PRED(bp))=NULL;
         freelist_head=bp;
+        */
+    
+
+        /* 按地址顺序进行放置空闲块，使得空间利用率得到提升 */
+    
+        void* head=freelist_head;
+        while(GET_ADDRESS(SUCC(head))!=NULL && head<bp) head=GET_ADDRESS(SUCC(head));
+        //插入尾部
+        if(GET_ADDRESS(SUCC(head))==NULL)
+        {
+                GET_ADDRESS(SUCC(head))=bp;
+                GET_ADDRESS(PRED(bp))=head;
+                GET_ADDRESS(SUCC(bp))=NULL;
+        }
+        else
+        {
+            //要插再链表头前面
+            if(head==freelist_head)
+            {
+                GET_ADDRESS(PRED(head))=bp;
+                GET_ADDRESS(SUCC(bp))=head;
+                GET_ADDRESS(PRED(bp))=NULL;
+                freelist_head=bp;
+            }
+            //把节点安装在中间
+            else
+            {
+                GET_ADDRESS(SUCC(GET_ADDRESS(PRED(head))))=bp;
+                GET_ADDRESS(PRED(bp))=GET_ADDRESS(PRED(head));
+                GET_ADDRESS(SUCC(bp))=head;
+                GET_ADDRESS(PRED(head))=bp;
+            }
+        }
+    
     }
 }
 
