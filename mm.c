@@ -59,8 +59,8 @@ team_t team = {
 static void* head_listp;
 /* 存放链表头的地方，一共13个链表块，分别是{1,8},{9,16},{17,32},{33,64},{65,128},{129,256},{257,512},{513,1024},{1025,2048}
         {2049,4096},{4097,8192},{8192,正无穷} */
-static int MAX_SIZE=12;
-static void* linkhead[12]={NULL};           
+static int MAX_SIZE=10;
+static void* linkhead[10]={NULL};           
 
 
 
@@ -77,14 +77,17 @@ static int findlink(size_t size);           //寻找对应的下标
  */
 int mm_init(void)
 {
-        //链表初始化
-    for(int i=0;i<13;++i)
-        linkhead[i]=NULL;
 
     /* Create the initial empty heap */
     if((head_listp=mem_sbrk(4*WSIZE))==(void *)-1)
         return -1;
     
+
+            //链表初始化
+    for(int i=0;i<MAX_SIZE;++i)
+        linkhead[i]=NULL;
+
+
     PUT(head_listp,0);       /* Alignment padding */
     PUT(head_listp+(1*WSIZE),PACK(DSIZE,1));  /* Prologue header */
     PUT(head_listp+(2*WSIZE),PACK(DSIZE,1));  /* Prologue footer */
@@ -163,9 +166,9 @@ void *mm_malloc(size_t size)
     /* Adjust block size to include overhead and alignment reqs. */
     //要加上头尾两个指针
     if(size<=DSIZE)
-        asize=3*DSIZE;
+        asize=2*DSIZE;
     else
-        asize=DSIZE*((size+(DSIZE*2)+(DSIZE-1))/DSIZE);
+        asize=DSIZE*((size+(DSIZE)+(DSIZE-1))/DSIZE);
     
     /* Search the free list for a fit */
     if((bp=find_fit(asize))!=NULL)
@@ -289,16 +292,14 @@ static void *coalesce(void *bp)
 //寻找合适的块
 static void *find_fit(size_t size)
 {
-    /* First fit search */
+    /* Version1: First fit search */
+    /* Version2: Best fit search */
     for(int index=findlink(size);index<MAX_SIZE;++index)
     {
         void* bp=linkhead[index];
         while(bp!=NULL)
         {
-            if(size<=GET_SIZE(HDRP(bp)))
-            {
-            return bp;
-            }
+            if(GET_SIZE(HDRP(bp))>=size) return bp;
             bp=GET_ADDRESS(SUCC(bp));
         }
     }
@@ -311,19 +312,21 @@ static void place(void* bp,size_t asize)
 {
 
     size_t left=GET_SIZE(HDRP(bp))-asize;
+    deletefree(bp);
     //大于双字要把头尾都考虑进行说明，可以进行分割,由于输入的asize肯定是双字结构，这样就保证了分割出来的内容也都是双字结构
     //前继和后继结点都要考虑进行
-    if(left>=(DSIZE*3))
+    if(left>=(DSIZE*2))
     {
-        deletefree(bp);
         //申请的块为忙碌
         PUT(HDRP(bp),PACK(asize,1));
         PUT(FTRP(bp),PACK(asize,1));
         //分割出来的块为空闲
         PUT(HDRP(NEXT_BLKP(bp)),PACK(left,0));
         PUT(FTRP(NEXT_BLKP(bp)),PACK(left,0));
-        //把该结点从空闲链表中删除，并把下一个结点加入空闲链表
-        placefree(NEXT_BLKP(bp));
+        //把该结点从空闲链表中删除，并把下一个结点加入空闲链表，产生了一个空闲链表，所以执行一次合并操作
+        coalesce(NEXT_BLKP(bp));
+//        placefree(NEXT_BLKP(bp));
+
     }
     //无法进行分割
     else
@@ -332,7 +335,6 @@ static void place(void* bp,size_t asize)
         //全部设定为忙碌
         PUT(HDRP(bp),PACK(allsize,1));
         PUT(FTRP(bp),PACK(allsize,1));
-        deletefree(bp);
     }
 }
 
@@ -341,6 +343,7 @@ static void place(void* bp,size_t asize)
 //2.利用地址顺序来处理
 static void placefree(void* bp)
 {
+    //按顺序放置
     int index=findlink(GET_SIZE(HDRP(bp)));
     void* head=linkhead[index];
     if(head==NULL)
@@ -352,11 +355,40 @@ static void placefree(void* bp)
     }
     else
     {
-        //将结点插在链表头部
-        GET_ADDRESS(SUCC(bp))=linkhead[index];
-        GET_ADDRESS(PRED(linkhead[index]))=bp;
-        GET_ADDRESS(PRED(bp))=NULL;
-        linkhead[index]=bp;
+        size_t bpsize=GET_SIZE(HDRP(bp));
+        void* temp=NULL;
+        while(head!=NULL)
+        {
+            temp=head;
+            if(GET_SIZE(HDRP(head))>=bpsize) break;
+            head=GET_ADDRESS(SUCC(head));
+        }
+        if(head==NULL)
+        {
+            //插入尾部
+            GET_ADDRESS(SUCC(temp))=bp;
+            GET_ADDRESS(PRED(bp))=temp;
+            GET_ADDRESS(SUCC(bp))=NULL;
+        }
+        //插入前面
+        else
+        {
+            if(head==linkhead[index])
+            {
+                GET_ADDRESS(PRED(head))=bp;
+                GET_ADDRESS(SUCC(bp))=head;
+                GET_ADDRESS(PRED(bp))=NULL;
+                linkhead[index]=bp;
+            }
+            //插入中间
+            else
+            {
+                GET_ADDRESS(SUCC(GET_ADDRESS(PRED(head))))=bp;
+                GET_ADDRESS(PRED(bp))=GET_ADDRESS(PRED(head));
+                GET_ADDRESS(SUCC(bp))=head;
+                GET_ADDRESS(PRED(head))=bp;
+            }
+        }
     }
 }
 
@@ -394,7 +426,7 @@ static void deletefree(void* bp)
 //寻找对应的下标
 static int findlink(size_t size)
 {
-    if(size<=4)
+    if(size<=8)
         return 0;
     else if(size<=16)
         return 1;
@@ -408,16 +440,12 @@ static int findlink(size_t size)
         return 5;
     else if(size<=512)
         return 6;
-    else if(size<=1024)
-        return 7;
     else if(size<=2048)
-        return 8;
+        return 7;
     else if(size<=4096)
-        return 9;
-    else if(size<=8192)
-        return 10;
+        return 8;
     else
-        return 11;
+        return 9;
 }
 
 

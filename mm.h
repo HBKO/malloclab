@@ -58,7 +58,7 @@ extern team_t team;
 #define SUCC(bp) ((char *)(bp)+WSIZE)   //后继结点
 //#define SUCC(bp) ((char *)(bp))       //后继节点，只留后继结点
 /* 获取有效字节，即获取总的size数-头尾指针(因为busyblock)没有前继和后继指针 */
-#define GET_PAYLOAD(bp) (GET_SIZE(HDRP(bp))-2*DSIZE) 
+#define GET_PAYLOAD(bp) (GET_SIZE(HDRP(bp))-DSIZE) 
 
 
 /* Given block ptr bp, compute address of next and previous blocks */
