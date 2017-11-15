@@ -58,7 +58,7 @@ team_t team = {
 //把申请为static静态的声明都放在源文件的头部，表示这个是该源文件私有的，不放在头文件上面，因为头文件的更多是提供给别的函数用的
 static void* head_listp;
 static void* freelist_head=NULL;   //空闲链表的开头设置为NULL
-//static void* freelist_tail=NULL;    //空闲链表尾设置为NULL
+static void* freelist_tail=NULL;    //空闲链表尾设置为NULL
 static void *extend_heap(size_t words);
 static void *coalesce(void *bp);
 static void *find_fit(size_t size);     //找到合适的块
@@ -80,8 +80,15 @@ int mm_init(void)
     PUT(head_listp+(1*WSIZE),PACK(DSIZE,1));  /* Prologue header */
     PUT(head_listp+(2*WSIZE),PACK(DSIZE,1));  /* Prologue footer */
     PUT(head_listp+(3*WSIZE),PACK(0,1));      /* Epilogue header */
-    head_listp+=(2*WSIZE); 
+    head_listp+=(2*WSIZE);
+    
+    
+    //链表初始化
     freelist_head=NULL;
+    freelist_tail=NULL;
+
+
+
     #ifdef DEBUG
 //        printf("the size of head_listp :%x\n",GET_SIZE(HDRP(head_listp)));
 //        printf("the alloc of head_listp: %x\n",GET_ALLOC(FTRP(head_listp)));
@@ -337,6 +344,7 @@ static void placefree(void* bp)
     if(freelist_head==NULL)
     {
         freelist_head=bp;
+        freelist_tail=bp;
         //指向的是它的地址，地址里面存的都是是上一个或者下一个块的地址，所以每解一次引用得到的都是对应的下一个块的地址
         GET_ADDRESS(PRED(freelist_head))=NULL;
         GET_ADDRESS(SUCC(freelist_head))=NULL;
@@ -354,33 +362,72 @@ static void placefree(void* bp)
     
 
         /* 按地址顺序进行放置空闲块，使得空间利用率得到提升 */
-    
-        void* head=freelist_head;
-        while(GET_ADDRESS(SUCC(head))!=NULL && head<bp) head=GET_ADDRESS(SUCC(head));
-        //插入尾部
-        if(GET_ADDRESS(SUCC(head))==NULL)
+        /* 设置头尾指针来进行二分搜索，加快搜索的速度 */
+        void* head;
+        unsigned int Midaddress=((unsigned int)freelist_head+(unsigned int)freelist_tail)/2;
+        if(((unsigned int)bp)>Midaddress)
         {
-                GET_ADDRESS(SUCC(head))=bp;
-                GET_ADDRESS(PRED(bp))=head;
-                GET_ADDRESS(SUCC(bp))=NULL;
-        }
-        else
-        {
-            //要插再链表头前面
-            if(head==freelist_head)
+            head=freelist_tail;
+            while(GET_ADDRESS(PRED(head))!=NULL && head>bp) head=GET_ADDRESS(PRED(head));
+            //插入头部
+            if(GET_ADDRESS(PRED(head))==NULL)
             {
                 GET_ADDRESS(PRED(head))=bp;
                 GET_ADDRESS(SUCC(bp))=head;
                 GET_ADDRESS(PRED(bp))=NULL;
                 freelist_head=bp;
             }
-            //把节点安装在中间
             else
             {
-                GET_ADDRESS(SUCC(GET_ADDRESS(PRED(head))))=bp;
-                GET_ADDRESS(PRED(bp))=GET_ADDRESS(PRED(head));
-                GET_ADDRESS(SUCC(bp))=head;
-                GET_ADDRESS(PRED(head))=bp;
+                //插入链表尾部
+                if(head==freelist_tail)
+                {
+                    GET_ADDRESS(SUCC(head))=bp;
+                    GET_ADDRESS(PRED(bp))=head;
+                    GET_ADDRESS(SUCC(bp))=NULL;
+                    freelist_tail=bp;
+                }
+                //把节点安插在中间，这次得到的head是头一个节点了
+                else
+                {
+                    GET_ADDRESS(PRED(GET_ADDRESS(SUCC(head))))=bp;
+                    GET_ADDRESS(SUCC(bp))=GET_ADDRESS(SUCC(head));
+                    GET_ADDRESS(PRED(bp))=head;
+                    GET_ADDRESS(SUCC(head))=bp;
+                }
+            }
+        }
+        else
+        {
+            head=freelist_head;
+
+            while(GET_ADDRESS(SUCC(head))!=NULL && head<bp) head=GET_ADDRESS(SUCC(head));
+            //插入尾部
+            if(GET_ADDRESS(SUCC(head))==NULL)
+            {
+                    GET_ADDRESS(SUCC(head))=bp;
+                    GET_ADDRESS(PRED(bp))=head;
+                    GET_ADDRESS(SUCC(bp))=NULL;
+                    freelist_tail=bp;
+            }
+            else
+            {
+                //要插再链表头前面
+                if(head==freelist_head)
+                {
+                    GET_ADDRESS(PRED(head))=bp;
+                    GET_ADDRESS(SUCC(bp))=head;
+                    GET_ADDRESS(PRED(bp))=NULL;
+                    freelist_head=bp;
+                }
+                //把节点安装在中间
+                else
+                {
+                    GET_ADDRESS(SUCC(GET_ADDRESS(PRED(head))))=bp;
+                    GET_ADDRESS(PRED(bp))=GET_ADDRESS(PRED(head));
+                    GET_ADDRESS(SUCC(bp))=head;
+                    GET_ADDRESS(PRED(head))=bp;
+                }
             }
         }
     
@@ -395,7 +442,7 @@ static void deletefree(void* bp)
     if(GET_ADDRESS(PRED(bp))==NULL && GET_ADDRESS(SUCC(bp))==NULL)
     {
         freelist_head=NULL;
-//        freelist_tail=NULL;
+        freelist_tail=NULL;
     }
     else if(GET_ADDRESS(PRED(bp))==NULL && GET_ADDRESS(SUCC(bp))!=NULL)  //链表头，并且不只有一个结点
     {
@@ -406,7 +453,7 @@ static void deletefree(void* bp)
     else if(GET_ADDRESS(PRED(bp))!=NULL && GET_ADDRESS(SUCC(bp))==NULL)   //链表尾，并且不只有一个结点
     {
         GET_ADDRESS(SUCC(GET_ADDRESS(PRED(bp))))=NULL;
-//        freelist_tail=GET_ADDRESS(PRED(bp));
+        freelist_tail=GET_ADDRESS(PRED(bp));
         GET_ADDRESS(PRED(bp))=NULL;
     }
     else                    //中间结点
