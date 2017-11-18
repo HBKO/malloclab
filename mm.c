@@ -60,7 +60,7 @@ static void* head_listp;
 /* 存放链表头的地方，一共13个链表块，分别是{1,8},{9,16},{17,32},{33,64},{65,128},{129,256},{257,512},{513,1024},{1025,2048}
         {2049,4096},{4097,8192},{8192,正无穷} */
 static int MAX_SIZE=10;
-static void* linkhead[10]={NULL};           
+static void* linkhead[10]={NULL};        
 
 
 
@@ -70,6 +70,7 @@ static void *find_fit(size_t size);     //找到合适的块
 static void place(void* bp,size_t asize);   //放置块并进行分割
 static void placefree(void* bp);            //将空闲链表放置在链表的开头
 static void deletefree(void* bp);           //删除空闲结点
+static void *recoalesce(void *bp,size_t needsize);          //针对realloc而实现的coalesce函数
 static int findlink(size_t size);           //寻找对应的下标
 
 /* 
@@ -179,7 +180,17 @@ void *mm_malloc(size_t size)
     }
 
     /* No fit found. Get more memory and place the block */
-    extendsize=MAX(asize,CHUNKSIZE);
+//    extendsize=MAX(asize,CHUNKSIZE);
+
+    
+
+    extendsize=asize;
+    if(extendsize<=DSIZE)
+        extendsize=2*DSIZE;
+    else
+        extendsize=DSIZE*((extendsize+(DSIZE)+(DSIZE-1))/DSIZE);
+
+
     //不够申请
     if((bp=extend_heap(extendsize/WSIZE))==NULL)
     {
@@ -216,20 +227,121 @@ void *mm_realloc(void *ptr, size_t size)
         mm_free(ptr);
         return ptr;
     }
+
+    size_t asize=0;
+    //计算要分配这么size内存所需要的总体size
+    if(size<=DSIZE)
+        asize=2*DSIZE;
+    else
+        asize=DSIZE*((size+(DSIZE)+(DSIZE-1))/DSIZE);
+
+
     if(ptr!=NULL)
     {
-        size_t finalsize=0;
-        void *newptr=mm_malloc(size);
         size_t oldsize=GET_PAYLOAD(ptr);
         if(oldsize<size)
-            finalsize=oldsize;
+        {
+            
+            void* newptr=recoalesce(ptr,asize);
+            if(newptr==NULL)
+            {
+                newptr=mm_malloc(asize);
+                memcpy(newptr,ptr,oldsize);
+                mm_free(ptr);
+                return newptr;
+            }
+            else
+            {
+                return newptr;
+            }
+        }
+        else if(oldsize==size)
+        {
+            return ptr;
+        }
+        //申请的块比原来的块小
         else
-            finalsize=size;
+        {
+//            place(ptr,asize);
+            return ptr;
+        }
+        /*
         memcpy(newptr,ptr,finalsize);
         mm_free(ptr);
         return newptr;
+        */
     }
     return NULL;
+}
+
+//找不到合适的块直接返回NULL,其它情况返回已经memcpy过的块的头指针
+static void *recoalesce(void *bp,size_t needsize)
+{
+    size_t prev_alloc=GET_ALLOC(FTRP(PREV_BLKP(bp)));
+    size_t next_alloc=GET_ALLOC(HDRP(NEXT_BLKP(bp)));
+    size_t size=GET_SIZE(HDRP(bp));
+    //情况一，前后都没有空闲块
+    if(prev_alloc && next_alloc)
+    {
+        return NULL;
+    }
+
+    //情况二，后一块是空闲的
+    else if(prev_alloc && !next_alloc)
+    {
+        size+=GET_SIZE(HDRP(NEXT_BLKP(bp)));
+        //即使加上去内存也不够
+        if(size<needsize)
+            return NULL;
+        else
+        {
+            deletefree(NEXT_BLKP(bp));
+            //合并
+            PUT(HDRP(bp),PACK(size,1));
+            PUT(FTRP(bp),PACK(size,1));
+//            place(bp,needsize);
+            return bp;
+        }
+    }
+    //情况三，前一块是空闲的
+    else if(!prev_alloc && next_alloc)
+    {
+        size+=GET_SIZE(HDRP(PREV_BLKP(bp)));
+        if(size<needsize)
+            return NULL;
+        else
+        {
+            size_t thissize=GET_PAYLOAD(bp);
+            void* prev_point=PREV_BLKP(bp);
+            deletefree(prev_point);
+            //合并
+            PUT(FTRP(bp),PACK(size,1));
+            PUT(HDRP(prev_point),PACK(size,1));
+            //拷贝
+            memcpy(prev_point,bp,thissize);
+//            place(prev_point,needsize);
+            return prev_point;
+        }
+    }
+    //情况四，前后都是空闲的
+    else
+    {
+        size+=(GET_SIZE(HDRP(NEXT_BLKP(bp)))+GET_SIZE(FTRP(PREV_BLKP(bp))));
+        if(size<needsize)
+            return NULL;
+        else
+        {
+            size_t thissize=GET_PAYLOAD(bp);
+            void* prev_point=PREV_BLKP(bp);
+            deletefree(prev_point);
+            deletefree(NEXT_BLKP(bp));
+            PUT(FTRP(NEXT_BLKP(bp)),PACK(size,1));
+            PUT(HDRP(PREV_BLKP(bp)),PACK(size,1));
+            memcpy(prev_point,bp,thissize);
+//            place(prev_point,needsize);
+            return prev_point;
+        }
+    }
 }
 
 
@@ -294,11 +406,13 @@ static void *find_fit(size_t size)
 {
     /* Version1: First fit search */
     /* Version2: Best fit search */
+//    maxfreesize=0;
     for(int index=findlink(size);index<MAX_SIZE;++index)
     {
         void* bp=linkhead[index];
         while(bp!=NULL)
         {
+//            maxfreesize=GET_SIZE(HDRP(bp));
             if(GET_SIZE(HDRP(bp))>=size) return bp;
             bp=GET_ADDRESS(SUCC(bp));
         }
@@ -312,7 +426,9 @@ static void place(void* bp,size_t asize)
 {
 
     size_t left=GET_SIZE(HDRP(bp))-asize;
-    deletefree(bp);
+    int alloc=GET_ALLOC(HDRP(bp));
+    if(alloc==0)
+        deletefree(bp);
     //大于双字要把头尾都考虑进行说明，可以进行分割,由于输入的asize肯定是双字结构，这样就保证了分割出来的内容也都是双字结构
     //前继和后继结点都要考虑进行
     if(left>=(DSIZE*2))
